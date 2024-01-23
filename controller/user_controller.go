@@ -93,7 +93,6 @@ func Login(c *gin.Context) {
 	}
 
 	attemptsKey := fmt.Sprintf("login_attempts:%s", userInput.Email)
-	var attempts int64
 
 	lockedKey := fmt.Sprintf("account_locked:%s", userInput.Email)
 	isLocked, err := db.RedisCli.Exists(context.Background(), lockedKey).Result()
@@ -104,7 +103,6 @@ func Login(c *gin.Context) {
 	}
 
 	if isLocked > 0 {
-		isLocked = 0
 		lockTimestamp, err := db.RedisCli.Get(context.Background(), lockedKey).Result()
 		if err != nil {
 			log.Printf("Error getting lock timestamp from Redis: %v", err)
@@ -121,16 +119,16 @@ func Login(c *gin.Context) {
 
 		// If 1 minute has not passed since the lock, return an appropriate response
 		if time.Since(lockTime) >= time.Minute {
-			attempts = 0
-			isLocked = 0
 			err := db.RedisCli.Del(context.Background(), lockedKey, attemptsKey).Err()
+			err = db.RedisCli.Del(context.Background(), fmt.Sprintf("login_attempts:%s", userInput.Email)).Err()
 			if err != nil {
 				log.Printf("Error resetting account lock and login attempts in Redis: %v", err)
 				c.JSON(http.StatusInternalServerError, gin.H{"error": "Internal Server Error"})
 				return
 			}
+			c.JSON(http.StatusOK, gin.H{"unlock": "Account unlocked", "islocked": isLocked})
 		} else {
-			c.JSON(http.StatusLocked, gin.H{"error": "Account locked. Please try again later.", "Time-still": time.Since(lockTime)})
+			c.JSON(http.StatusLocked, gin.H{"error": "Account locked. Please try again later.", "Time-still": time.Since(lockTime), "islocked": isLocked})
 			return
 		}
 	}
@@ -150,7 +148,7 @@ func Login(c *gin.Context) {
 	if err != nil {
 		// Increase login attempts in Redis
 		attemptsKey = fmt.Sprintf("login_attempts:%s", userInput.Email)
-		attempts, err = db.RedisCli.Incr(context.Background(), attemptsKey).Result()
+		attempts, err := db.RedisCli.Incr(context.Background(), attemptsKey).Result()
 		if err != nil {
 			log.Printf("Error increasing login attempts in Redis: %v", err)
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "Internal Server Error"})
@@ -158,8 +156,7 @@ func Login(c *gin.Context) {
 		}
 
 		if attempts > 5 {
-			isLocked = 0
-			attempts = 0
+			err = db.RedisCli.Del(context.Background(), fmt.Sprintf("login_attempts:%s", userInput.Email)).Err()
 			lockTimestamp := time.Now().UTC().Format(time.RFC3339)
 			err = db.RedisCli.Set(context.Background(), lockedKey, lockTimestamp, 1*time.Minute).Err()
 			if err != nil {
@@ -167,18 +164,16 @@ func Login(c *gin.Context) {
 				c.JSON(http.StatusInternalServerError, gin.H{"error": "Internal Server Error"})
 				return
 			}
-
-			c.JSON(http.StatusLocked, gin.H{"error": "Your account has been locked, entered the wrong password more than 5 times"})
+			c.JSON(http.StatusLocked, gin.H{"error": "Your account has been locked, entered the wrong password more than 5 times ", "attemps": attempts})
 			return
 		} else {
-			c.JSON(http.StatusUnauthorized, gin.H{"error": "Invalid credentials"})
+			c.JSON(http.StatusUnauthorized, gin.H{"error": "Invalid credentials", "attemps": attempts, "islocked": isLocked})
 			return
 		}
 
 	}
 	// Reset login attempts in Redis upon successful login
-	isLocked = 0
-	attempts = 0
+	err = db.RedisCli.Del(context.Background(), lockedKey, attemptsKey).Err()
 	err = db.RedisCli.Del(context.Background(), fmt.Sprintf("login_attempts:%s", userInput.Email)).Err()
 	if err != nil {
 		log.Printf("Error resetting login attempts in Redis: %v", err)
