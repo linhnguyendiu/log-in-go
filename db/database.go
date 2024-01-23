@@ -4,11 +4,15 @@ import (
 	"fmt"
 	"log-in-go/models"
 
+	"github.com/go-redis/redis/v8"
 	"gorm.io/driver/mysql"
 	"gorm.io/gorm"
 )
 
-var DB *gorm.DB
+var (
+	DB       *gorm.DB
+	RedisCli *redis.Client
+)
 
 var err error
 
@@ -22,4 +26,14 @@ func InitialMigration() {
 	}
 
 	DB.AutoMigrate(&models.User{})
+	InitRedis()
+}
+
+func InitRedis() {
+	RedisCli = redis.NewClient(&redis.Options{
+		Addr:     "localhost:6379",
+		Password: "", // no password set
+		DB:       0,  // use default DB
+	})
+	fmt.Println(RedisCli)
 }
